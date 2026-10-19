@@ -491,6 +491,30 @@ try {
   await page.locator("#free").fill("Unstaged free answer");
   check("typed: a free-text answer is not counted, the footer warns it will not be sent", (await page.locator("#send").textContent()) === "Send 3 to Agent" && /Q4/.test(await page.locator("#unstaged-note").textContent()), `${await page.locator("#send").textContent()} | ${await page.locator("#staged-list").textContent()}`);
   await capture("typed-not-added-footer.png");
+  const rejectSend = (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: false, error: "deliberate rejection" }) });
+  await page.route("**/send", rejectSend);
+  await page.locator(".item", { hasText: "Q3" }).click();
+  await page.locator("#send").click();
+  await page.waitForFunction(() => document.getElementById("send-why").textContent.includes("deliberate rejection"));
+  check("typed: failed Send clears the box and exposes a removable staged note", (await page.locator("#thread-in").inputValue()) === "" && await page.locator("aside .msg.staged [data-rm]").count() === 1);
+  await page.reload();
+  await page.locator(".item").first().waitFor();
+  for (const id of ["Q3", "Q5"]) {
+    await page.locator(".item", { hasText: id }).click();
+    check(`typed: failed Send persists the staged note on ${id}`, (await page.locator("#thread-in").inputValue()) === "" && await page.locator("aside .msg.staged [data-rm]").count() === 1);
+  }
+  await page.locator("#visualize").click();
+  check("typed: failed Send persists removable visual feedback", (await page.locator("#feedback-in").inputValue()) === "" && await page.locator("aside .msg.staged [data-rmf]").count() === 1);
+  await page.locator("aside [data-rmf]").click();
+  check("typed: failed feedback can be removed", await page.locator("aside .msg.staged").count() === 0);
+  await page.locator("#feedback-in").fill("Typed visual note, not added");
+  await page.locator("#visualize").click();
+  await page.locator(".item", { hasText: "Q3" }).click();
+  await page.locator("aside [data-rm]").click();
+  check("typed: failed discussion can be removed", await page.locator("aside .msg.staged").count() === 0);
+  await page.locator("#thread-in").fill("Typed on Q3, never added");
+  await page.locator(".item", { hasText: "Q4" }).click();
+  await page.unroute("**/send", rejectSend);
   await page.locator("#send").click();
   const typedEv = JSON.parse(await srv.nth(3));
   const typedShape = typedEv.actions.map((a) => `${a.q || "visual"}:${a.type}:${a.text || ""}`).sort();
@@ -514,6 +538,15 @@ try {
   writeState(s);
   await page.waitForFunction((n) => document.getElementById("agent-status").textContent.includes("handled #" + n), typedEv.seq);
   await page.locator("#thread-in").fill("Typed before finishing");
+  await page.route("**/send", rejectSend);
+  await page.locator("#finish").click(); await page.locator("#finish-yes").click();
+  await page.waitForFunction(() => document.getElementById("send-why").textContent.includes("deliberate rejection"));
+  check("typed: failed Finish clears the box and exposes a removable staged note", (await page.locator("#thread-in").inputValue()) === "" && await page.locator("aside .msg.staged [data-rm]").count() === 1);
+  await page.reload();
+  await page.locator(".item").first().waitFor();
+  await page.locator(".item", { hasText: "Q3" }).click();
+  check("typed: failed Finish persists its staged note", (await page.locator("#thread-in").inputValue()) === "" && (await page.locator("aside .msg.staged").textContent()).includes("Typed before finishing"));
+  await page.unroute("**/send", rejectSend);
   await page.locator("#finish").click(); await page.locator("#finish-yes").click();
   const typedFin = JSON.parse(await srv.nth(4));
   check("typed: finish carries typed discussion text before the finish action", typedFin.actions.length === 2 && typedFin.actions[0].q === "q3" && typedFin.actions[0].type === "thread" && typedFin.actions[0].text === "Typed before finishing" && typedFin.actions[1].type === "finish", JSON.stringify(typedFin.actions));

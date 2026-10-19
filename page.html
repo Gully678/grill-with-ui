@@ -385,6 +385,7 @@ function carryTyped() {
     if (id === "__visual") local.vfeedback.push(text); else (st(id).thread = st(id).thread || []).push(text);
     delete local.drafts[id].thread;
   }
+  commit();
 }
 function stageFeedback(text) { local.vfeedback.push(text); if (local.drafts.__visual) delete local.drafts.__visual.thread; commit(); }
 function removeFeedback(i) { local.vfeedback.splice(i, 1); commit(); }
