@@ -79,7 +79,9 @@ The agent prints a URL. Open it. Answer by clicking an option (the recommended o
 outlined) or writing free text. A card marked "Pick one or more" takes any number of
 options, and each click toggles one. Start a discussion in the right-hand panel; use **Defer** and **Reopen** on a card when
 you want to. Everything you do is staged (and survives a reload) until you press **Send N to
-Agent** (⌘↩). The one exception is **Explore deeper** next to a question's title: it goes to
+Agent** (⌘↩). Text left typed in a discussion or feedback box goes with the Send as if you had
+added it; a free-text answer is sent only once staged, and the footer warns about one that is
+not. The one exception is **Explore deeper** next to a question's title: it goes to
 the agent the moment you click it, and the pros and cons table for that question's options
 appears in the discussion panel when the agent is done. The agent answers
 threads, writes the tables, records your answers, and adds the next round of questions to

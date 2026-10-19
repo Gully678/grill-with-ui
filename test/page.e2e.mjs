@@ -470,6 +470,54 @@ try {
   const a5 = multiEv.actions.find((a) => a.q === "q5"), a6 = multiEv.actions.find((a) => a.q === "q6");
   check("multi: send carries the option sets", a5 && a5.kind === "accept" && JSON.stringify(a5.options) === '["A","C"]' && a6 && a6.kind === "option" && JSON.stringify(a6.options) === '["A","B","C"]', JSON.stringify(multiEv.actions));
 
+  // Typed but never added (issue #32 follow-up): Send must not silently drop what is in a
+  // discussion box. Typed discussion text, on any question, and typed visual feedback go with
+  // the send as if added. A typed free-text answer would answer the question, so it stays out
+  // of the send, stays in its box, and the footer says so before you press Send.
+  s.agent = { status: "waiting", since: new Date().toISOString(), handled: multiEv.seq };
+  s.visual = { kind: "prototype", version: 2, at: new Date().toISOString(), note: "v2: narrower list", thread: [] };
+  writeState(s);
+  await page.waitForFunction((n) => document.getElementById("agent-status").textContent.includes("handled #" + n), multiEv.seq);
+  await page.locator(".item", { hasText: "Q3" }).click();
+  await page.locator("#thread-in").fill("Typed on Q3, never added");
+  check("typed: discussion text alone enables Send and is counted", await page.locator("#send").isEnabled() && (await page.locator("#send").textContent()) === "Send 1 to Agent", await page.locator("#send").textContent());
+  check("typed: footer names the typed message", /Q3[^·]*typed/.test(await page.locator("#staged-list").textContent()), await page.locator("#staged-list").textContent());
+  await page.locator(".item", { hasText: "Q5" }).click();
+  await page.locator("#thread-in").fill("Typed on Q5, also not added");
+  await page.locator("#visualize").click();
+  await page.locator("#feedback-in").fill("Typed visual note, not added");
+  await page.locator("#visualize").click();
+  await page.locator(".item", { hasText: "Q4" }).click();
+  await page.locator("#free").fill("Unstaged free answer");
+  check("typed: a free-text answer is not counted, the footer warns it will not be sent", (await page.locator("#send").textContent()) === "Send 3 to Agent" && /Q4/.test(await page.locator("#unstaged-note").textContent()), `${await page.locator("#send").textContent()} | ${await page.locator("#staged-list").textContent()}`);
+  await capture("typed-not-added-footer.png");
+  await page.locator("#send").click();
+  const typedEv = JSON.parse(await srv.nth(3));
+  const typedShape = typedEv.actions.map((a) => `${a.q || "visual"}:${a.type}:${a.text || ""}`).sort();
+  check("typed: the send carries discussion text from the current and navigated-away questions and the visual note, and no free-text answer",
+    JSON.stringify(typedShape) === JSON.stringify(["q3:thread:Typed on Q3, never added", "q5:thread:Typed on Q5, also not added", "visual:visual-feedback:Typed visual note, not added"]), JSON.stringify(typedEv.actions));
+  await page.waitForFunction((n) => document.getElementById("staged-list").textContent.includes("Sent #" + n), typedEv.seq);
+  check("typed: the free-text answer is still in its box after the send", (await page.locator("#free").inputValue()) === "Unstaged free answer");
+  await page.locator(".item", { hasText: "Q3" }).click();
+  check("typed: the carried box is cleared and the message shows as sending", (await page.locator("#thread-in").inputValue()) === "" && (await page.locator("aside .msg.pending").textContent()).includes("Typed on Q3, never added"));
+  await page.locator(".item", { hasText: "Q5" }).click();
+  check("typed: the navigated-away box is cleared too", (await page.locator("#thread-in").inputValue()) === "");
+  await page.locator("#visualize").click();
+  check("typed: the visual feedback box is cleared", (await page.locator("#feedback-in").inputValue()) === "");
+  await page.locator("#visualize").click();
+  await page.reload();
+  await page.locator(".item").first().waitFor();
+  await page.locator(".item", { hasText: "Q3" }).click();
+  check("typed: the cleared box stays cleared after a reload", (await page.locator("#thread-in").inputValue()) === "");
+  // Finish ships everything staged, so it ships typed discussion text too.
+  s.agent = { status: "waiting", since: new Date().toISOString(), handled: typedEv.seq };
+  writeState(s);
+  await page.waitForFunction((n) => document.getElementById("agent-status").textContent.includes("handled #" + n), typedEv.seq);
+  await page.locator("#thread-in").fill("Typed before finishing");
+  await page.locator("#finish").click(); await page.locator("#finish-yes").click();
+  const typedFin = JSON.parse(await srv.nth(4));
+  check("typed: finish carries typed discussion text before the finish action", typedFin.actions.length === 2 && typedFin.actions[0].q === "q3" && typedFin.actions[0].type === "thread" && typedFin.actions[0].text === "Typed before finishing" && typedFin.actions[1].type === "finish", JSON.stringify(typedFin.actions));
+
   // The server-gone step above produces ERR_CONNECTION_REFUSED fetch failures by design.
   const real = errors.filter((e) => !e.includes("ERR_CONNECTION_REFUSED"));
   check("no console errors (besides the deliberate server-gone fetches)", real.length === 0, real.join(" | "));
