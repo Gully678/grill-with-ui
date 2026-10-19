@@ -78,10 +78,13 @@ In any project:
 The agent prints a URL. Open it. Answer by clicking an option (the recommended one is
 outlined) or writing free text. A card marked "Pick one or more" takes any number of
 options, and each click toggles one. Start a discussion in the right-hand panel; use **Defer** and **Reopen** on a card when
-you want to. Everything you do is staged (and survives a reload) until you press **Send N to
-Agent** (⌘↩). Text left typed in a discussion or feedback box goes with the Send as if you had
-added it; a free-text answer is sent only once staged, and the footer warns about one that is
-not. The one exception is **Explore deeper** next to a question's title: it goes to
+you want to. Staged actions and typed drafts survive a reload. **Send N to Agent** (⌘↩)
+ships staged actions together with text left in any question's discussion or the visual
+feedback box, including questions you navigated away from. These notes count toward the
+Send total and can enable Send on their own; sending clears their boxes. A free-text answer
+is sent only once staged (**Stage text**, or ⌘↩ in its box): until then it stays in its box,
+does not count toward Send, and the footer names the question in a warning. If sending fails, carried notes remain
+staged and removable. **Explore deeper** next to a question's title goes to
 the agent the moment you click it, and the pros and cons table for that question's options
 appears in the discussion panel when the agent is done. The agent answers
 threads, writes the tables, records your answers, and adds the next round of questions to
@@ -111,8 +114,8 @@ The checkbox hides when the grill is finished. Finish reconciles and copies the 
 visual next to the design doc as
 `docs/<topic>-visual.html`.
 
-**Finish grill** sends at once (after an inline confirm), together with anything you had
-staged; the agent writes the design doc to the path shown in the header (default
+**Finish grill** sends at once (after an inline confirm), including the same pending items
+as Send; the agent writes the design doc to the path shown in the header (default
 `docs/<topic>-design.md` in your project) and stops.
 
 To pick up an unfinished grill, in the same project:

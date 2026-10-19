@@ -478,6 +478,10 @@ try {
   s.visual = { kind: "prototype", version: 2, at: new Date().toISOString(), note: "v2: narrower list", thread: [] };
   writeState(s);
   await page.waitForFunction((n) => document.getElementById("agent-status").textContent.includes("handled #" + n), multiEv.seq);
+  await page.locator(".item", { hasText: "Q4" }).click();
+  await page.locator("#free").fill("Unstaged free answer");
+  check("typed: a free answer alone warns without enabling Send", await page.locator("#send").isDisabled() && (await page.locator("#send").textContent()) === "Send to Agent" && /Q4/.test(await page.locator("#unstaged-note").textContent()));
+  await capture("typed-free-answer-only.png");
   await page.locator(".item", { hasText: "Q3" }).click();
   await page.locator("#thread-in").fill("Typed on Q3, never added");
   check("typed: discussion text alone enables Send and is counted", await page.locator("#send").isEnabled() && (await page.locator("#send").textContent()) === "Send 1 to Agent", await page.locator("#send").textContent());
@@ -522,12 +526,15 @@ try {
     JSON.stringify(typedShape) === JSON.stringify(["q3:thread:Typed on Q3, never added", "q5:thread:Typed on Q5, also not added", "visual:visual-feedback:Typed visual note, not added"]), JSON.stringify(typedEv.actions));
   await page.waitForFunction((n) => document.getElementById("staged-list").textContent.includes("Sent #" + n), typedEv.seq);
   check("typed: the free-text answer is still in its box after the send", (await page.locator("#free").inputValue()) === "Unstaged free answer");
+  await capture("typed-free-answer-preserved.png");
   await page.locator(".item", { hasText: "Q3" }).click();
   check("typed: the carried box is cleared and the message shows as sending", (await page.locator("#thread-in").inputValue()) === "" && (await page.locator("aside .msg.pending").textContent()).includes("Typed on Q3, never added"));
+  await capture("typed-discussion-sending.png");
   await page.locator(".item", { hasText: "Q5" }).click();
   check("typed: the navigated-away box is cleared too", (await page.locator("#thread-in").inputValue()) === "");
   await page.locator("#visualize").click();
   check("typed: the visual feedback box is cleared", (await page.locator("#feedback-in").inputValue()) === "");
+  await capture("typed-feedback-sending.png");
   await page.locator("#visualize").click();
   await page.reload();
   await page.locator(".item").first().waitFor();
@@ -550,6 +557,7 @@ try {
   await page.locator("#finish").click(); await page.locator("#finish-yes").click();
   const typedFin = JSON.parse(await srv.nth(4));
   check("typed: finish carries typed discussion text before the finish action", typedFin.actions.length === 2 && typedFin.actions[0].q === "q3" && typedFin.actions[0].type === "thread" && typedFin.actions[0].text === "Typed before finishing" && typedFin.actions[1].type === "finish", JSON.stringify(typedFin.actions));
+  if (evidence) writeFileSync(join(evidence, "typed-note-events.json"), JSON.stringify({ send: typedEv, finish: typedFin }, null, 2));
 
   // The server-gone step above produces ERR_CONNECTION_REFUSED fetch failures by design.
   const real = errors.filter((e) => !e.includes("ERR_CONNECTION_REFUSED"));

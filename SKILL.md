@@ -182,8 +182,8 @@ described there, then return to listening.
      set the question's `status: "reopened"`, append the quoted note to its `thread`, set
      its `rec` to what the note implies, and set `updated: true`. The answer changes only
      when the user answers the reopened question. The visual follows the note either way.
-   - `finish` → see Finish below, after the other actions. The page sends it the moment the
-     user confirms, with everything they had staged in front of it.
+   - `finish` → see Finish below, after the other actions. For what the page includes when
+     the user confirms, see [README: Use](README.md#use).
 3. If an answer changes the recommendation of a still-open question, give that question its
    new `rec` and `updated: true` (the page marks it). Set `updated: false` once the user
    answers it.
