@@ -368,9 +368,24 @@ const useSubagent = () => local.subagent !== false;
 const isFinishing = () => pendingOfType("finish").length > 0;
 const allSettled = () => qs().length > 0 && !qs().some(isOpen);
 function stagedCount() {
-  let n = local.vfeedback.length;
+  let n = local.vfeedback.length + typedNotes().length;
   for (const s of Object.values(local.staged)) n += (s.answer ? 1 : 0) + (s.defer ? 1 : 0) + (s.reopen ? 1 : 0) + (s.thread ? s.thread.length : 0);
   return n;
+}
+// Text typed in a discussion or feedback box but never added used to be left behind by Send
+// without a word (#32). A note commits you to nothing, so it now goes with the send as if
+// added: typedNotes lists every such box, on any question, and carryTyped stages them. A typed
+// free-text answer is different: it would answer the question, so it is never carried;
+// typedAnswers names those so the footer can say they will not be sent.
+const typed = (d, k) => (d && typeof d[k] === "string" ? d[k].trim() : "");
+const typedNotes = () => Object.entries(local.drafts).filter(([id, d]) => typed(d, "thread") && (id === "__visual" ? hasVisual() : !!byId(id))).map(([id, d]) => ({ id, text: typed(d, "thread") }));
+const typedAnswers = () => Object.entries(local.drafts).filter(([id, d]) => id !== "__visual" && typed(d, "free") && byId(id)).map(([id]) => id);
+function carryTyped() {
+  for (const { id, text } of typedNotes()) {
+    if (id === "__visual") local.vfeedback.push(text); else (st(id).thread = st(id).thread || []).push(text);
+    delete local.drafts[id].thread;
+  }
+  commit();
 }
 function stageFeedback(text) { local.vfeedback.push(text); if (local.drafts.__visual) delete local.drafts.__visual.thread; commit(); }
 function removeFeedback(i) { local.vfeedback.splice(i, 1); commit(); }
@@ -411,6 +426,7 @@ async function post(actions) {
 }
 async function send() {
   const { disabled } = sendState(); if (disabled) return;
+  carryTyped();
   const actions = buildActions();
   const j = await post(actions);
   if (j) { local.pending.push({ seq: j.seq, at: new Date().toISOString(), actions }); local.staged = {}; local.vfeedback = []; confirmFinish = false; commit(); }
@@ -418,6 +434,7 @@ async function send() {
 // Finish is not staged: confirming ships everything staged plus the finish action in one event, right away.
 async function finishNow() {
   if (sendState(false).disabled || isFinishing()) return;
+  carryTyped();
   const actions = buildActions().concat([visual() ? { type: "finish", subagent: useSubagent() } : { type: "finish" }]);
   const j = await post(actions);
   if (j) { local.pending.push({ seq: j.seq, at: new Date().toISOString(), actions }); local.staged = {}; local.vfeedback = []; confirmFinish = false; commit(); }
@@ -615,7 +632,7 @@ function renderMain() {
   const ar = $("accept-rec"); if (ar) ar.onclick = (e) => { e.preventDefault(); stageKeys(q, recKeys(q)); };
   const ex = $("explore"); if (ex) ex.onclick = () => explore(q.id);
   $("stage-text").onclick = () => { const t = $("free").value.trim(); if (t) { (local.drafts[q.id] = local.drafts[q.id] || {}).free = ""; stageAnswer(q.id, { kind: "text", text: t }); } };
-  $("free").oninput = (e) => { (local.drafts[q.id] = local.drafts[q.id] || {}).free = e.target.value; save(); };
+  $("free").oninput = (e) => { (local.drafts[q.id] = local.drafts[q.id] || {}).free = e.target.value; save(); renderFooter(); };
   const cl = $("clear-staged"); if (cl) cl.onclick = (e) => { e.preventDefault(); clearStaged(q.id); };
   const df = $("defer"); if (df) df.onclick = (e) => { e.preventDefault(); stageDefer(q.id); };
   const ro = $("reopen"); if (ro) ro.onclick = (e) => { e.preventDefault(); stageReopen(q.id); };
@@ -646,7 +663,7 @@ function renderAside() {
   aside.querySelectorAll("[data-rm]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); removeThread(q.id, Number(a.dataset.rm)); }));
   if (lk) return;
   $("stage-thread").onclick = () => { const t = $("thread-in").value.trim(); if (t) stageThread(q.id, t); };
-  $("thread-in").oninput = (e) => { (local.drafts[q.id] = local.drafts[q.id] || {}).thread = e.target.value; save(); };
+  $("thread-in").oninput = (e) => { (local.drafts[q.id] = local.drafts[q.id] || {}).thread = e.target.value; save(); renderFooter(); };
 }
 function renderFeedback(aside) {
   const v = visual(); const lk = locked(); const d = local.drafts.__visual || {};
@@ -661,7 +678,7 @@ function renderFeedback(aside) {
   aside.querySelectorAll("[data-rmf]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); removeFeedback(Number(a.dataset.rmf)); }));
   if (lk) return;
   $("stage-feedback").onclick = () => { const t = $("feedback-in").value.trim(); if (t) stageFeedback(t); };
-  $("feedback-in").oninput = (e) => { (local.drafts.__visual = local.drafts.__visual || {}).thread = e.target.value; save(); };
+  $("feedback-in").oninput = (e) => { (local.drafts.__visual = local.drafts.__visual || {}).thread = e.target.value; save(); renderFooter(); };
 }
 function renderFooter() {
   const n = stagedCount(); const list = $("staged-list");
@@ -673,9 +690,12 @@ function renderFooter() {
     return `${esc(id).toUpperCase()} ${bits.join(" ")}`;
   });
   if (local.vfeedback.length) parts.push(`visual +${local.vfeedback.length} msg`);
+  for (const { id } of typedNotes()) parts.push(`${id === "__visual" ? "visual" : esc(id).toUpperCase()} +1 msg typed`);
   const lp = lastPending();
   const sent = lp ? `<span class="sent"><span class="spin"></span>Sent #${lp.seq} · waiting for the agent</span>` : "";
-  list.innerHTML = locked() ? "This grill is finished." : n ? `<b>${n} staged</b> · ${parts.join(" · ")}${sent ? " · " + sent : ""}` : sent || "Nothing staged. Pick an option or write in the discussion.";
+  const loose = typedAnswers().map((id) => esc(id).toUpperCase());
+  const note = loose.length ? ` <span class="warn" id="unstaged-note">${loose.length > 1 ? "Typed answers on " + loose.join(", ") + " are" : "Typed answer on " + loose[0] + " is"} not staged and will not be sent; press Stage text to include ${loose.length > 1 ? "them" : "it"}.</span>` : "";
+  list.innerHTML = locked() ? "This grill is finished." : (n ? `<b>${n} staged</b> · ${parts.join(" · ")}${sent ? " · " + sent : ""}` : sent || "Nothing staged. Pick an option or write in the discussion.") + note;
   const fa = $("finish-area");
   if (locked()) fa.innerHTML = "";
   else if (isFinishing()) fa.innerHTML = `<button id="finish" type="button" disabled><span class="spin"></span>Finishing…</button>`;
