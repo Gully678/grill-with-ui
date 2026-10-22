@@ -646,6 +646,11 @@ function applyPatch(state, p, now) {
 // own toString is not a function, so "any value" is not safe there. Optional fields stay optional.
 const STATUSES = ["open", "answered", "deferred", "reopened"];
 const ANSWER_KINDS = ["accept", "option", "text"];
+// Importance levels and option ratings. A grill without `axes` uses these four; a question
+// without `level` and an option without `ratings` render as before (no pill, no chips).
+const LEVELS = ["skim", "check", "careful", "yours"];
+const RATINGS = ["good", "mixed", "poor", "na"];
+const DEFAULT_AXES = [{ key: "ux", name: "User experience" }, { key: "correct", name: "Technical correctness" }, { key: "risk", name: "Risk" }, { key: "cost", name: "Cost" }];
 function validateState(s) {
   const need = (ok, msg) => { if (!ok) bad(msg); };
   const str = (v) => typeof v === "string";
@@ -679,6 +684,16 @@ function validateState(s) {
       check(t, "avoid", strs, `${w}: avoid must be an array of strings`);
     });
   }
+  let axisKeys = DEFAULT_AXES.map((a) => a.key);
+  if ("axes" in s) {
+    need(Array.isArray(s.axes) && s.axes.length > 0, 'axes must be a non-empty array of {"key","name"}; leave it out (patch null) for the default four');
+    const seen = new Set();
+    s.axes.forEach((a, i) => {
+      need(isObj(a) && str(a.key) && a.key.trim() !== "" && str(a.name) && a.name.trim() !== "", `axes[${i}] must be {"key","name"} with a non-empty string key and name`);
+      need(!seen.has(a.key), `axis key ${a.key} appears twice in axes`); seen.add(a.key);
+    });
+    axisKeys = s.axes.map((a) => a.key);
+  }
   need(Array.isArray(s.questions), "questions must be an array");
   const ids = new Set();
   s.questions.forEach((q, i) => {
@@ -696,6 +711,20 @@ function validateState(s) {
     check(q, "deps", strs, `${w}.deps must be an array of question ids`);
     check(q, "options", (v) => Array.isArray(v) && v.every((x) => isObj(x) && str(x.k) && (!("text" in x) || str(x.text))),
       `${w}.options must be an array of {"k","text"} with string k and text`);
+    check(q, "level", (v) => LEVELS.includes(v), `${w}.level must be one of ${LEVELS.join("|")}`);
+    check(q, "levelReason", str, `${w}.levelReason must be a string`);
+    if ("level" in q) need(str(q.levelReason) && q.levelReason.trim() !== "", `${w}.levelReason is required with a level: a short line saying what drove it ("high stakes, close call")`);
+    (q.options || []).forEach((o, i) => {
+      if (!("ratings" in o)) return;
+      const where = `${w}.options[${i}].ratings`;
+      // Your call means the axes do not separate the options, so ratings there would be noise.
+      need(q.level !== "yours", `${w} is a Your-call question (level "yours"), so its options carry no ratings: drop ${where}`);
+      need(isObj(o.ratings), `${where} must be an object from axis key to ${RATINGS.join("|")}`);
+      for (const [k, v] of Object.entries(o.ratings)) {
+        need(axisKeys.includes(k), `${where}: ${k} is not an axis of this grill (axes: ${axisKeys.join(", ")})`);
+        need(RATINGS.includes(v), `${where}.${k} must be one of ${RATINGS.join("|")}`);
+      }
+    });
     if ("answer" in q) {
       need(isObj(q.answer) && ANSWER_KINDS.includes(q.answer.kind), `${w}.answer.kind must be one of ${ANSWER_KINDS.join("|")}`);
       texts(q.answer, ["option", "text"], `${w}.answer`);
@@ -729,6 +758,14 @@ function validateState(s) {
   }
 }
 
+function validateAxesChange(previous, next) {
+  const hasRatings = (s) => Array.isArray(s.questions) && s.questions.some((q) => Array.isArray(q?.options)
+    && q.options.some((o) => isObj(o?.ratings) && Object.keys(o.ratings).length > 0));
+  if (!hasRatings(previous) || !hasRatings(next)) return;
+  const axes = (s) => JSON.stringify((s.axes ?? DEFAULT_AXES).map(({ key, name }) => [key, name]));
+  if (axes(previous) !== axes(next)) bad("axes cannot change while ratings remain; choose axes before rating options");
+}
+
 function cmdPatch(o) {
   const session = mustSession(o);
   const file = path.join(session, "state.json");
@@ -749,7 +786,7 @@ function cmdPatch(o) {
   let state;
   try { state = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { die(`state.json in ${session} is not valid JSON, so it was not patched: ${oneLine(e.message)}`); }
   let next;
-  try { next = applyPatch(state, p, new Date().toISOString()); validateState(next); } catch (e) {
+  try { next = applyPatch(state, p, new Date().toISOString()); validateState(next); validateAxesChange(state, next); } catch (e) {
     // Every failure owes the caller one line, never a stack trace: an error the merge never
     // expected (a patch nested deep enough to overflow clean, say) reports the same way.
     die(e instanceof PatchError ? `patch rejected (state.json unchanged): ${oneLine(e.message)}`

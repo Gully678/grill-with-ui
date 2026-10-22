@@ -45,7 +45,7 @@ let srv = startServe();
 const ready = JSON.parse(await srv.nth(1));
 const url = ready.url;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
@@ -69,9 +69,20 @@ const contrast = (theme, fg, bg) => page.evaluate(([theme, fg, bg]) => {
 }, [theme, fg, bg]);
 const readable = async (fg, bg, min) => { const r = [await contrast("light", fg, bg), await contrast("dark", fg, bg)]; return { ok: r.every((x) => x >= min), extra: `light ${r[0].toFixed(2)}:1, dark ${r[1].toFixed(2)}:1, need ${min}:1` }; };
 
+let s, cr, multiEv = { seq: 0 }, typedFin = { seq: 0 };
 try {
   await page.goto(url);
   await page.locator(".item").first().waitFor();
+  // An old session (no axes, no levels, no ratings) renders as it always did.
+  check("old session: no level pill, no rating chips, no sidebar level words, no Levels button", await page.locator(".imp").count() === 0
+    && await page.locator(".chips").count() === 0 && await page.locator(".sword").count() === 0 && await page.locator("#levels-toggle").count() === 1 && await page.locator("#levels-toggle").isHidden());
+  check("old session: the sidebar keeps the question order", JSON.stringify(await page.locator("nav .item .id").allTextContents()) === '["Q1","Q2","Q3","Q4"]');
+  check("old session: the recommended option still says Recommended", (await page.locator(".opt.rec .tag").textContent()) === "Recommended" && (await page.locator(".why b").textContent()) === "Why B.");
+  await capture("levels-legacy.png");
+  await page.locator('.item[data-q="q1"]').click();
+  check("old session: durable stays out of the card", !(await page.locator(".crumb").textContent()).includes("durable"));
+  await page.locator('.item[data-q="q3"]').click();
+  if (!process.argv.includes("--importance-only")) {
   check("default selection = first open question in the current round", (await page.locator(".item.selected .id").textContent()) === "Q3");
   check("updated marker on q3", await page.locator(".item.updated .id", { hasText: "Q3" }).count() === 1);
   check("crumb shows recommendation updated", (await page.locator(".crumb .upd").textContent()) === "recommendation updated");
@@ -127,7 +138,8 @@ try {
   await capture("theme-dark.png");
   check("theme: third click returns to system", (await cycle()) === 200 && (await mode()) === "system" && !(await isDark()));
   await page.locator(".item", { hasText: "Q1" }).click();
-  let cr = await readable([".opt.chosen .check path", "stroke"], [".opt.chosen .check circle", "fill"], 3);
+  check("durable is not shown on the card (it stays in state for the doc)", !(await page.locator(".crumb").textContent()).includes("durable"), await page.locator(".crumb").textContent());
+  cr = await readable([".opt.chosen .check path", "stroke"], [".opt.chosen .check circle", "fill"], 3);
   check("theme: the tick on a chosen option stands out from its circle in both themes", cr.ok, cr.extra);
   // inline markdown (issue #9): code spans read in both themes, only absolute http(s) links render
   cr = await readable([".card .body code", "color"], [".card .body code", "backgroundColor"], 4.5);
@@ -289,7 +301,7 @@ try {
   check("send disabled while pending even with new staging", (await (async () => { await page.locator(".opt[data-opt='A']").click(); return page.locator("#send").isDisabled(); })()));
 
   // agent working: disabled; after 5 min: enabled with a note
-  let s = fixture(); s.agent = { status: "working", since: new Date().toISOString(), handled: 0 }; writeState(s);
+  s = fixture(); s.agent = { status: "working", since: new Date().toISOString(), handled: 0 }; writeState(s);
   await page.waitForFunction(() => document.getElementById("agent-status").textContent.includes("Agent working"));
   await page.locator(".item", { hasText: "Q3" }).click();
   check("send disabled while working", await page.locator("#send").isDisabled());
@@ -472,9 +484,12 @@ try {
   await page.locator('.opt[data-opt="C"]').click();
   check("multi: changing an answer starts from the recorded set", await page.locator(".opt.staged").count() === 3 && await page.locator(".opt.chosen").count() === 0);
   await page.locator("#send").click();
-  const multiEv = JSON.parse(await srv.nth(2));
+  multiEv = JSON.parse(await srv.nth(2));
   const a5 = multiEv.actions.find((a) => a.q === "q5"), a6 = multiEv.actions.find((a) => a.q === "q6");
   check("multi: send carries the option sets", a5 && a5.kind === "accept" && JSON.stringify(a5.options) === '["A","C"]' && a6 && a6.kind === "option" && JSON.stringify(a6.options) === '["A","B","C"]', JSON.stringify(multiEv.actions));
+  // The server logs the event before the browser processes the response and saves
+  // cleared staging. Wait for that commit before the next fixture reloads the page.
+  await page.waitForFunction(() => document.getElementById("send").textContent === "Send to Agent");
 
   // Typed but never added (issue #32 follow-up): Send must not silently drop what is in a
   // discussion box. Typed discussion text, on any question, and typed visual feedback go with
@@ -561,9 +576,198 @@ try {
   check("typed: failed Finish persists its staged note", (await page.locator("#thread-in").inputValue()) === "" && (await page.locator("aside .msg.staged").textContent()).includes("Typed before finishing"));
   await page.unroute("**/send", rejectSend);
   await page.locator("#finish").click(); await page.locator("#finish-yes").click();
-  const typedFin = JSON.parse(await srv.nth(4));
+  typedFin = JSON.parse(await srv.nth(4));
   check("typed: finish carries typed discussion text before the finish action", typedFin.actions.length === 2 && typedFin.actions[0].q === "q3" && typedFin.actions[0].type === "thread" && typedFin.actions[0].text === "Typed before finishing" && typedFin.actions[1].type === "finish", JSON.stringify(typedFin.actions));
   if (evidence) writeFileSync(join(evidence, "typed-note-events.json"), JSON.stringify({ send: typedEv, finish: typedFin }, null, 2));
+  // The server logs the finish before the browser saves its cleared staging; wait for that
+  // commit so the importance fixture below starts with nothing staged.
+  await page.waitForFunction((n) => document.getElementById("staged-list").textContent.includes("Sent #" + n), typedFin.seq);
+  }
+
+  // importance levels + rating chips (docs/importance-and-ratings-design.md)
+  const R = (ux, correct, risk, cost) => ({ ux, correct, risk, cost });
+  const lq = (id, extra) => ({ id, round: 4, deps: [], title: `Levelled ${id}`, body: "b", status: "open", durable: false, updated: false, thread: [],
+    options: [{ k: "A", text: "Alpha" }, { k: "B", text: "Beta" }], rec: { option: "A", why: "Alpha. Its weakest axis is cost." }, ...extra });
+  s = fixture(); s.agent = { status: "waiting", since: new Date().toISOString(), handled: typedFin.seq }; // the typed-note finish above is handled
+  s.questions.push(
+    lq("q7", { level: "skim", levelReason: "low stakes", options: [{ k: "A", text: "Top right", ratings: R("good", "good", "good", "good") }, { k: "B", text: "Bottom", ratings: R("mixed", "good", "good", "good") }] }),
+    lq("q8", { level: "check", levelReason: "high stakes, clear answer", durable: true }),
+    lq("q9", { level: "careful", levelReason: "high stakes, close call", title: "Where do sync conflicts get resolved?",
+      options: [{ k: "A", text: "Last write wins", ratings: R("poor", "mixed", "poor", "good") }, { k: "B", text: "Merge paragraphs", ratings: R("good", "good", "mixed", "na") }, { k: "C", text: "Keep both" }],
+      rec: { option: "B", why: "Nobody loses words. Its weakest axis is risk: lock-in." } }),
+    // ratings on a Your-call question cannot come through patch; a hand-written state still must not show them
+    lq("q10", { level: "yours", levelReason: "taste; no axis separates the options",
+      options: [{ k: "A", text: "Not synced", ratings: R("good", "good", "good", "good") }, { k: "B", text: "Local only" }, { k: "C", text: "Waiting to sync" }],
+      rec: { option: "B", why: "Says where the note is." } }),
+    lq("q11", {}),
+    lq("q12", { level: "check", levelReason: "high stakes, clear answer", multi: true,
+      options: [{ k: "A", text: "Email", ratings: R("good", "good", "good", "good") }, { k: "B", text: "SMS", ratings: R("good", "mixed", "mixed", "poor") }, { k: "C", text: "Push", ratings: R("mixed", "good", "good", "good") }],
+      rec: { options: ["A", "C"], why: "Both are free to send." } }),
+  );
+  writeState(s);
+  await page.reload();
+  await page.locator('.item[data-q="q9"]').waitFor();
+  check("levels: default selection follows the current round order", await page.locator(".item.selected").getAttribute("data-q") === "q9");
+  check("levels: within a round, Decide carefully and Your call first, then Check (and unlevelled), then Skim; earlier rounds keep their order",
+    JSON.stringify(await page.locator("nav .item .id").allTextContents()) === '["Q1","Q2","Q3","Q4","Q9","Q10","Q8","Q11","Q12","Q7"]', JSON.stringify(await page.locator("nav .item .id").allTextContents()));
+  check("levels: the sidebar names only Decide carefully and Your call rows", JSON.stringify(await page.locator("nav .sword").allTextContents()) === '["Decide carefully","Your call"]'
+    && await page.locator('.item[data-q="q9"] .sword.lvc-careful').count() === 1 && await page.locator('.item[data-q="q10"] .sword.lvc-yours').count() === 1
+    && await page.locator('.item[data-q="q8"] .sword, .item[data-q="q7"] .sword, .item[data-q="q11"] .sword').count() === 0);
+  check("levels: the sidebar row's tooltip names the level and its reason", (await page.locator('.item[data-q="q9"]').getAttribute("title")) === "Decide carefully · high stakes, close call");
+  check("levels: the two sidebar words are coloured apart (red, purple)", (await page.locator('.item[data-q="q9"] .sword').evaluate((el) => getComputedStyle(el).color)) !== (await page.locator('.item[data-q="q10"] .sword').evaluate((el) => getComputedStyle(el).color)));
+  check("levels: the Levels button shows once a question has a level", await page.locator("#levels-toggle").isVisible() && !(await page.locator("#levels").isVisible()));
+  await page.locator("#levels-toggle").click();
+  const lvText = await page.locator("#levels").textContent();
+  check("levels: the Levels popover explains all four levels", await page.locator("#levels").isVisible() && await page.locator("#levels .lv-row").count() === 4
+    && ["Decide carefully", "Your call", "Check", "Skim"].every((w) => lvText.includes(w)), lvText);
+  await capture("levels-popover.png");
+  await page.locator("h1").click();
+  check("levels: a click elsewhere closes the popover", !(await page.locator("#levels").isVisible()));
+
+  await page.locator('.item[data-q="q9"]').click();
+  check("levels: the card's pill names the level and the reason", await page.locator(".card .imp.careful").count() === 1
+    && (await page.locator(".imp b").textContent()) === "Decide carefully" && (await page.locator(".imp .why-l").textContent()) === "high stakes, close call");
+  const chipsOf = (k) => page.locator(`.opt[data-opt="${k}"] .chips .chip`);
+  check("chips: full axis names, in axis order, tinted by rating", JSON.stringify(await chipsOf("A").allTextContents()) === '["User experience","Technical correctness","Risk","Cost"]'
+    && JSON.stringify(await chipsOf("A").evaluateAll((els) => els.map((e) => e.className))) === '["chip p","chip x","chip p","chip g"]');
+  check("chips: the tooltip is the axis and the rating, nothing more", (await chipsOf("A").nth(2).getAttribute("title")) === "Risk: poor" && (await chipsOf("B").first().getAttribute("title")) === "User experience: good");
+  check("chips: a rating of na shows no chip; an unrated option shows no chip row", JSON.stringify(await chipsOf("B").allTextContents()) === '["User experience","Technical correctness","Risk"]'
+    && await page.locator('.opt[data-opt="C"] .chips').count() === 0);
+  check("chips: the chip row sits under the option's text, after it", await page.locator('.opt[data-opt="B"]').evaluate((el) => { const c = el.querySelector(".chips"); return !!c && c.previousSibling && c.previousSibling.textContent.includes("Merge paragraphs") && c.getBoundingClientRect().top > el.querySelector(".tag").getBoundingClientRect().bottom; }));
+  check("chips: green, yellow and red tints differ", new Set(await page.locator(".chips .chip").evaluateAll((els) => els.map((e) => getComputedStyle(e).backgroundColor))).size === 3);
+  check("levels: a non-Your-call recommendation still says Recommended", (await page.locator(".opt.rec .tag").textContent()) === "Recommended" && await page.locator(".opt.lean").count() === 0);
+  await capture("levels-careful-light.png");
+
+  await page.locator('.item[data-q="q8"]').click();
+  check("levels: Check pill; durable is still not shown on a durable question", await page.locator(".imp.check").count() === 1 && !(await page.locator(".crumb").textContent()).includes("durable"));
+  await page.locator('.item[data-q="q11"]').click();
+  check("levels: an unlevelled question has no pill", await page.locator(".imp").count() === 0);
+
+  await page.locator('.item[data-q="q10"]').click();
+  check("your call: purple pill, My lean instead of Recommended, Leaning in the why", await page.locator(".imp.yours").count() === 1 && await page.locator(".opt.rec").count() === 0
+    && (await page.locator(".opt.lean .tag").textContent()) === "My lean" && (await page.locator('.opt.lean').getAttribute("data-opt")) === "B" && (await page.locator(".why b").textContent()) === "Leaning B.");
+  check("your call: no rating chips, even when the state carries ratings", await page.locator(".chips").count() === 0);
+  await capture("levels-yours-light.png");
+  await page.locator('.opt.lean').click();
+  check("your call: picking the lean is still an accept", (await page.locator(".staged-line").textContent()).includes("Staged: accept B"));
+  await page.locator("#clear-staged").click();
+
+  await page.locator('.item[data-q="q12"]').click();
+  check("multi: every option carries chips; the recommended set is marked", await page.locator(".opt .chips").count() === 3 && await page.locator(".opt.rec").count() === 2);
+  await page.locator('.opt[data-opt="B"] .chip').first().click();
+  check("multi: a click on a chip still toggles its option", (await page.locator(".staged-line").textContent()).includes("Staged: option B"));
+  await page.locator("#clear-staged").click();
+
+  // dark mode: new colours are light-dark() pairs; the dark highlight is a neutral off-white, Decide carefully keeps the red
+  const colorIn = (theme, sel, prop) => page.evaluate(([theme, sel, prop]) => {
+    const r = document.documentElement, was = r.dataset.theme; r.dataset.theme = theme;
+    const v = getComputedStyle(document.querySelector(sel))[prop]; r.dataset.theme = was; return v;
+  }, [theme, sel, prop]);
+  const vars = await page.evaluate(() => ["--careful", "--careful-soft", "--careful-line", "--taste", "--taste-soft", "--taste-line", "--accent-soft", "--accent-line", "--stage-line", "--check-ink", "--skim-ink",
+    "--chip-g-bg", "--chip-g-ink", "--chip-g-line", "--chip-x-bg", "--chip-x-ink", "--chip-x-line", "--chip-p-bg", "--chip-p-ink", "--chip-p-line"]
+    .filter((v) => !getComputedStyle(document.documentElement).getPropertyValue(v).includes("light-dark(")));
+  check("dark mode: every new colour is a light-dark() variable", vars.length === 0, vars.join(", "));
+  await page.locator('.item[data-q="q9"]').click();
+  const accDark = await colorIn("dark", ".opt.rec", "borderTopColor"), accLight = await colorIn("light", ".opt.rec", "borderTopColor");
+  check("dark mode: the highlight colour is the neutral off-white; light mode keeps the terracotta", accDark === "rgb(217, 209, 195)" && accLight === "rgb(154, 58, 38)", `${accDark} / ${accLight}`);
+  const carDark = await colorIn("dark", ".imp.careful", "color"), carLight = await colorIn("light", ".imp.careful", "color");
+  check("dark mode: Decide carefully keeps its own red", carDark === "rgb(224, 120, 92)" && carLight === "rgb(154, 58, 38)", `${carDark} / ${carLight}`);
+  check("dark mode: chip tints switch to the dark pairs", (await colorIn("dark", ".chip.g", "backgroundColor")) === "rgb(31, 43, 34)" && (await colorIn("light", ".chip.g", "backgroundColor")) === "rgb(227, 238, 229)");
+  for (const [sel, name] of [[".chip.g", "good"], [".chip.x", "mixed"], [".chip.p", "poor"]]) {
+    cr = await readable([sel, "color"], [sel, "backgroundColor"], 4.5);
+    check(`dark mode: ${name} text is readable in both themes`, cr.ok, cr.extra);
+  }
+  for (const [id, level] of [["q9", "careful"], ["q10", "yours"], ["q8", "check"], ["q7", "skim"]]) {
+    await page.locator(`.item[data-q="${id}"]`).click();
+    for (const text of ["b", ".why-l"]) {
+      cr = await readable([`.imp.${level} ${text}`, "color"], [`.imp.${level}`, "backgroundColor"], 4.5);
+      check(`levels: ${level} pill ${text} is readable in both themes`, cr.ok, cr.extra);
+    }
+  }
+  await page.locator('.item[data-q="q9"]').click();
+  if (evidence) {
+    await page.emulateMedia({ colorScheme: "dark" }); await capture("levels-careful-dark.png");
+    await page.locator('.item[data-q="q10"]').click(); await capture("levels-yours-dark.png");
+    await page.emulateMedia({ colorScheme: "light" });
+  }
+
+  // Complete the real user path: chips and My lean → Send → agent patch → reload.
+  // The earlier defensive-render fixture intentionally has ratings on Your call;
+  // remove those through patch before exercising the valid agent workflow.
+  const taste = s.questions.find((q) => q.id === "q10");
+  const patchState = (patch) => execFileSync(process.execPath, [SERVER, "patch", "--session", session], {
+    env, encoding: "utf8", input: JSON.stringify(patch),
+  });
+  patchState({ questions: [{ id: taste.id, options: taste.options.map(({ ratings, ...option }) => option) }] });
+  await page.locator('.item[data-q="q9"]').click();
+  await page.locator('.opt.rec .chip').first().click();
+  await page.locator('.item[data-q="q10"]').click();
+  await page.locator('.opt.lean').click();
+  await page.locator('.item[data-q="q12"]').click();
+  await page.locator('.opt[data-opt="A"] .chip').first().click();
+  await page.locator('.opt[data-opt="C"] .chip').first().click();
+  check("ratings send: single, lean and multi answers are staged together", (await page.locator("#send").textContent()) === "Send 3 to Agent");
+  await capture("levels-multi-staged.png");
+  await page.reload();
+  await page.locator('.item[data-q="q12"]').click();
+  await page.locator('.opt.staged').first().waitFor();
+  check("ratings send: all choices survive reload before sending", (await page.locator("#send").textContent()) === "Send 3 to Agent" && await page.locator('.opt.staged').count() === 2);
+  const sentResponse = page.waitForResponse((r) => r.url().endsWith("/send") && r.request().method() === "POST");
+  await page.locator("#send").click();
+  const receipt = await (await sentResponse).json();
+  const sent = JSON.parse(readFileSync(join(session, "events.jsonl"), "utf8").trim().split("\n").at(-1));
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.seq, sent.seq);
+  assert.deepEqual(sent.actions, [
+    { q: "q9", type: "answer", kind: "accept", option: "B" },
+    { q: "q10", type: "answer", kind: "accept", option: "B" },
+    { q: "q12", type: "answer", kind: "accept", options: ["A", "C"] },
+  ]);
+  check("ratings send: the server persists exact single, lean and multi accept actions", true);
+  patchState({ agent: { status: "waiting", handled: sent.seq }, questions: sent.actions.map(({ q, type, ...answer }) => ({ id: q, status: "answered", answer })) });
+  await page.waitForFunction(() => document.querySelector('.item[data-q="q12"] .mark.answered'));
+  await page.reload();
+  await page.locator('.item[data-q="q12"]').click();
+  await page.locator('.opt.chosen').first().waitFor();
+  check("ratings send: acknowledged multi choices survive reload with their chips", await page.locator('.opt.chosen').count() === 2 && await page.locator('.opt.chosen .chips').count() === 2);
+  await capture("levels-multi-answered.png");
+  await page.locator('.item[data-q="q10"]').click();
+  check("ratings send: acknowledged lean survives reload without chips", await page.locator('.opt.chosen.lean').count() === 1 && await page.locator('.chips').count() === 0);
+  await capture("levels-yours-answered.png");
+  if (evidence) {
+    writeFileSync(join(evidence, "levels-send-event.json"), JSON.stringify(sent, null, 2));
+    writeFileSync(join(evidence, "levels-acknowledged-state.json"), readFileSync(stateFile));
+  }
+  s.agent.handled = sent.seq;
+
+  // a grill that replaced the default axes shows its own axis names
+  s.axes = [{ key: "reach", name: "Reach" }, { key: "spend", name: "Ad spend" }];
+  s.questions.push(lq("q13", { round: 5, level: "careful", levelReason: "high stakes, close call",
+    options: [{ k: "A", text: "Email", ratings: { reach: "mixed", spend: "good", ux: "poor" } }, { k: "B", text: "Ads", ratings: { reach: "good", spend: "poor" } }] }));
+  const q9 = s.questions.find((q) => q.id === "q9"); q9.status = "answered"; q9.answer = { kind: "accept", option: "B" };
+  writeState(s);
+  await page.locator('.item[data-q="q13"]').click();
+  check("levels: an answered row's level word fades with the rest of the settled work", Number(await page.locator('.item[data-q="q9"] .sword').evaluate((el) => getComputedStyle(el).opacity)) < 0.6
+    && (await page.locator('.item[data-q="q10"] .sword').evaluate((el) => getComputedStyle(el).opacity)) === "1");
+  check("axes: a replaced axis set shows its own names; a key outside the set is ignored", JSON.stringify(await chipsOf("A").allTextContents()) === '["Reach","Ad spend"]' && (await chipsOf("B").nth(1).getAttribute("title")) === "Ad spend: poor");
+
+  await capture("levels-custom-axes.png");
+
+  const selectionCase = async (name, questions, expected) => {
+    writeState({ ...fixture(), questions });
+    await page.reload();
+    await page.locator(".item.selected").waitFor();
+    check(name, await page.locator(".item.selected").getAttribute("data-q") === expected);
+  };
+  const settled = lq("q20", { round: 5, status: "answered" });
+  await selectionCase("levels: a settled current round falls back in sidebar order", [
+    settled, lq("q1", { level: "skim", levelReason: "low stakes" }),
+    lq("q2", { level: "careful", levelReason: "close call" }),
+  ], "q2");
+  const answeredLevel = [lq("q10", {}), lq("q2", {}), lq("q1", { status: "answered", level: "careful", levelReason: "close call" })];
+  await selectionCase("levels: answered levels still trigger natural-id ordering for default selection", answeredLevel, "q2");
+  await selectionCase("levels: fallback includes answered levels when ordering open questions", [settled, ...answeredLevel], "q2");
+  await selectionCase("old session: unlevelled rounds retain original selection order", [lq("q10", {}), lq("q2", {})], "q10");
 
   // The server-gone step above produces ERR_CONNECTION_REFUSED fetch failures by design.
   const real = errors.filter((e) => !e.includes("ERR_CONNECTION_REFUSED"));
