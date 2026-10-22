@@ -43,10 +43,13 @@ export function md(text) {
   const formatted = formatInline(withLinks);
   // Content is already escaped, so this injects only our safe tags.
   return formatted
-    .replace(/\0LINK(\d+)\0/g, (_, n) => links[Number(n)])
-    .replace(/\0CODE(\d+)\0/g, (_, n) => codes[Number(n)]);
+    .replace(/\0LINK(\d+)\0/g, (m, n) => links[Number(n)] ?? m)
+    .replace(/\0CODE(\d+)\0/g, (m, n) => codes[Number(n)] ?? m);
 }
 
+// Only absolute http(s) links render. Relative paths (/visual would open the
+// agent's visual unsandboxed), protocol-relative //host, #fragments, and every
+// other scheme stay plain text.
 function isSafeUrl(url) {
-  return /^(https?:\/\/[^\s"'<>]+|\/[^\s"'<>]*|#[^\s"'<>]*)$/.test(url);
+  return /^https?:\/\/[^\s"'<>]+$/.test(url);
 }

@@ -104,7 +104,7 @@
   #explore { font-size: 13px; padding: 6px 12px; flex-shrink: 0; }
   #explore:disabled { background: var(--panel); border-color: var(--rule); color: var(--ink-3); }
   .card .body { font-size: 15px; color: var(--ink-2); max-width: 62ch; margin: 0; white-space: pre-line; }
-  .card .body code, .opt code, .why code, .msg .text code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; background: #efebe3; padding: 1px 5px; border-radius: 4px; }
+  .card .body code, .opt code, .why code, .msg .text code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; background: var(--hover); padding: 1px 5px; border-radius: 4px; }
   .card .body a, .opt a, .why a, .msg .text a { color: var(--accent); }
   .opts { list-style: none; padding: 0; margin: 24px 0 0; display: grid; gap: 8px; }
   .opt { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); cursor: pointer; }
@@ -276,7 +276,7 @@ const formatInline = (text) => text
   .replace(/\*\*(?!\s)([^*]+?)(?<!\s)\*\*/g, (_, b) => `<strong>${b}</strong>`)
   .replace(/(?<!\*)\*(?!\s)([^*]+?)(?<!\s)\*(?!\*)/g, (_, i) => `<em>${i}</em>`)
   .replace(/(^|\W)_([^_]+?)_(\W|$)/g, (_, pre, i, post) => `${pre}<em>${i}</em>${post}`);
-const isSafeMdUrl = (url) => /^(https?:\/\/[^\s"'<>]+|\/[^\s"'<>]*|#[^\s"'<>]*)$/.test(url);
+const isSafeMdUrl = (url) => /^https?:\/\/[^\s"'<>]+$/.test(url); // absolute http(s) only
 const md = (s) => {
   const codes = [];
   const noCode = esc(s).replace(/`([^`\n]+?)`/g, (_, code) => {
@@ -291,8 +291,8 @@ const md = (s) => {
   });
   const formatted = formatInline(withLinks);
   return formatted
-    .replace(/\0LINK(\d+)\0/g, (_, n) => links[Number(n)])
-    .replace(/\0CODE(\d+)\0/g, (_, n) => codes[Number(n)]);
+    .replace(/\0LINK(\d+)\0/g, (m, n) => links[Number(n)] ?? m)
+    .replace(/\0CODE(\d+)\0/g, (m, n) => codes[Number(n)] ?? m);
 };
 // ---- markdown END ----
 const WORKING_GRACE_MS = 5 * 60 * 1000;

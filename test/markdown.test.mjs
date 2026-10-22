@@ -53,6 +53,29 @@ test("links render as anchors, unsafe URLs stay literal", () => {
   );
 });
 
+test("only absolute http and https links render; everything else stays plain text", () => {
+  assert.equal(
+    md("[docs](https://example.com/a?b=1)"),
+    '<a href="https://example.com/a?b=1" target="_blank" rel="noopener noreferrer">docs</a>'
+  );
+  assert.equal(
+    md("[docs](http://example.com)"),
+    '<a href="http://example.com" target="_blank" rel="noopener noreferrer">docs</a>'
+  );
+  // Protocol-relative: would load another origin.
+  assert.equal(md("[x](//evil.com)"), "[x](//evil.com)");
+  // Relative path: /visual would open the agent's visual unsandboxed.
+  assert.equal(md("[x](/visual)"), "[x](/visual)");
+  assert.equal(md("[x](#q3)"), "[x](#q3)");
+  assert.equal(md("[x](javascript:alert(1))"), "[x](javascript:alert(1))");
+  assert.equal(md("[x](data:text/html,hi)"), "[x](data:text/html,hi)");
+  assert.equal(md("[x](mailto:a@example.com)"), "[x](mailto:a@example.com)");
+});
+
+test("placeholder-shaped input stays literal", () => {
+  assert.equal(md("\0LINK7\0 and \0CODE3\0"), "\0LINK7\0 and \0CODE3\0");
+});
+
 test("formatting never rewrites link URLs", () => {
   assert.equal(
     md("[guide](https://example.com/_docs_/x)"),
