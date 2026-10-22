@@ -1,13 +1,16 @@
 // Regression: answering a new round acknowledges the send without redrawing an existing visual.
 // PLAYWRIGHT_PKG=/path/to/@playwright/test/index.mjs node test/manual-visual.e2e.mjs
+// Optional GRILL_EVIDENCE_DIR saves sandbox screenshots and the actual persisted sends.
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_PKG || "@playwright/test");
+const evidence = process.env.GRILL_EVIDENCE_DIR;
+if (evidence) mkdirSync(evidence, { recursive: true });
 const server = join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs");
 const env = { ...process.env, GRILL_HOME: mkdtempSync(join(tmpdir(), "grill-manual-visual-")) };
 const { session } = JSON.parse(execFileSync(process.execPath, [server, "new", "--topic", "Manual visuals"], { env, encoding: "utf8" }));
@@ -83,8 +86,53 @@ try {
   await page.waitForFunction(() => document.querySelector("#visual-frame")?.getAttribute("src") === "/visual?v=2");
   assert.equal(await page.locator("#visual-stale").count(), 0, "a successful requested draw clears the stale indication");
   assert.equal(await page.frameLocator("#visual-frame").locator("#content").textContent(), "Version two");
+
+  // The visual's scripts run, but never with the grill's origin: not in the iframe, and not
+  // when the visual is opened directly in a tab (the server sends a sandbox CSP with it).
+  writeFileSync(join(session, "visual.html"), `<!doctype html><title>Visual sandbox check</title><h1 id='content'>Visual sandbox check</h1><p>Script execution: <span id='ran'></span></p><p>Session read (/state): <span id='read'></span></p><p>Send to agent (/send): <span id='sent'></span></p>
+<script>
+const put = (id, v) => { document.getElementById(id).textContent = v; };
+put("ran", "scripts run");
+fetch("/state").then((r) => r.text()).then((t) => (t.includes("Manual visuals") ? "read" : "empty"), () => "blocked").then((v) => put("read", v));
+fetch("/send", { method: "POST", body: JSON.stringify({ actions: [{ type: "visualize" }] }) }).then((r) => "status " + r.status, () => "blocked").then((v) => put("sent", v));
+</script>`);
+  state.visual.version = 3;
+  save();
+  await page.waitForFunction(() => document.querySelector("#visual-frame")?.getAttribute("src") === "/visual?v=3");
+  const frame = page.frameLocator("#visual-frame");
+  await frame.locator("#sent").filter({ hasText: /./ }).waitFor();
+  await frame.locator("#read").filter({ hasText: /./ }).waitFor();
+  assert.equal(await frame.locator("#ran").textContent(), "scripts run", "the visual's scripts still run in the iframe");
+  assert.equal(await frame.locator("#read").textContent(), "blocked", "the iframed visual cannot read /state");
+  assert.notEqual(await frame.locator("#sent").textContent(), "status 200", "the iframed visual cannot send to the agent");
+  if (evidence) await page.screenshot({ path: join(evidence, "sandbox-iframe.png"), fullPage: true });
+  const tab = await browser.newPage();
+  tab.on("pageerror", (error) => errors.push(error.message));
+  await tab.goto(url + "visual?v=3");
+  await tab.locator("#sent").filter({ hasText: /./ }).waitFor();
+  await tab.locator("#read").filter({ hasText: /./ }).waitFor();
+  assert.equal(await tab.locator("#ran").textContent(), "scripts run", "the visual's scripts run when opened directly");
+  assert.equal(await tab.locator("#read").textContent(), "blocked", "the visual opened directly cannot read /state");
+  assert.notEqual(await tab.locator("#sent").textContent(), "status 200", "the visual opened directly cannot send to the agent");
+  if (evidence) {
+    await tab.screenshot({ path: join(evidence, "sandbox-direct-tab.png"), fullPage: true });
+    writeFileSync(join(evidence, "sandbox-events.jsonl"), readFileSync(join(session, "events.jsonl")));
+    const results = async (surface) => ({
+      scripts: await surface.locator("#ran").textContent(),
+      stateRead: await surface.locator("#read").textContent(),
+      send: await surface.locator("#sent").textContent(),
+    });
+    writeFileSync(join(evidence, "sandbox-results.json"), JSON.stringify({
+      iframe: await results(frame), directTab: await results(tab),
+      eventsBeforeVisual: events.length,
+      eventsAfterVisual: readFileSync(join(session, "events.jsonl"), "utf8").trim().split("\n").length,
+    }, null, 2));
+  }
+  await tab.close();
+  assert.equal(readFileSync(join(session, "events.jsonl"), "utf8").trim().split("\n").length, 2, "neither copy of the visual landed a send");
+
   assert.deepEqual(errors, []);
-  console.log("manual visual e2e: passed (acknowledgement, next-round input, preserved iframe, stale status, explicit regeneration, reload)");
+  console.log("manual visual e2e: passed (acknowledgement, next-round input, preserved iframe, stale status, explicit regeneration, reload, sandboxed visual)");
 } finally {
   await browser?.close();
   if (child.exitCode === null) await new Promise((resolve) => { child.once("exit", resolve); child.kill(); });

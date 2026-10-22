@@ -185,6 +185,23 @@ opener.
 non-zero and leaves the file untouched; a good one prints one short summary line, never the
 state.
 
+By default `serve` listens on 127.0.0.1. Every route requires a Host header matching
+`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` (case-insensitive), or the host of
+a URL the server printed (the LAN URL, or the `--host` address); other values receive 403.
+The IPv6 spelling is accepted as a header, but the server does not listen on `::1`. This
+prevents a web page that points its hostname at your machine (DNS rebinding) from reading
+the session. In LAN mode a request from a non-loopback address that carries a valid token
+may use any Host, so the page also works opened as `http://<name>.local:<port>/?t=<token>`;
+a loopback request never gets that pass. The port is required: avoid `--port 80`, since
+browsers omit that default port from Host and are refused. Local clients such as curl
+remain trusted: POSTs without an Origin header are allowed after the Host check.
+
+`/visual` is sent with `Content-Security-Policy: sandbox allow-scripts`: its scripts run
+with an opaque origin, even when opened in a separate tab. They cannot read the grill's
+session responses or submit an accepted Send. This sandbox does not disable networking;
+the [visual brief](visual-brief.md#the-file) defines the artifact's offline requirements.
+POST bodies over 1 MB on `/send` and `/theme` are refused with 413.
+
 `GRILL_HOME` overrides `~/.grill-with-ui`.
 
 ## Tests
@@ -192,6 +209,7 @@ state.
 ```sh
 node --test test/server.test.mjs
 PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/page.e2e.mjs
+PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/manual-visual.e2e.mjs
 PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/subagent-toggle.e2e.mjs
 ```
 
@@ -199,5 +217,7 @@ The page check needs Playwright with Chromium; point `PLAYWRIGHT_PKG` at an exis
 or run it with `@playwright/test` installed next to the repo. It starts a real server on a
 throwaway session and drives the page end to end (staging, reload, send, working state,
 server restart, finished state).
-The focused toggle check covers both drawing modes, the choice at Send time, and per-grill
-persistence. Set `GRILL_EVIDENCE_DIR` to save screenshots and sent events from either check.
+The manual-visual check covers explicit regeneration and sandbox isolation both in the
+iframe and in a separate tab. The focused toggle check covers both drawing modes, the
+choice at Send time, and per-grill persistence. Set `GRILL_EVIDENCE_DIR` to save screenshots
+and sent events from any of these browser checks.
