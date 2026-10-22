@@ -430,7 +430,8 @@ async function runningServer(session) {
   try { info = JSON.parse(fs.readFileSync(path.join(session, "server.json"), "utf8")); } catch { return null; }
   if (!info || !info.url || !info.pid || !alive(info.pid)) return null;
   try { // the pid may have been reused: trust it only if the server at that url answers for this session
-    const r = await fetch(info.url + "listener", { signal: AbortSignal.timeout(2000) });
+    const probe = new URL(info.url); probe.pathname = "/listener"; // keeps a --host URL's ?t= token
+    const r = await fetch(probe, { signal: AbortSignal.timeout(2000) });
     return r.ok && (await r.json()).session === session ? info : null;
   } catch { return null; }
 }
@@ -438,7 +439,7 @@ async function serveDetached(session) {
   const serverFile = path.join(session, "server.json");
   const log = path.join(session, "serve.log");
   const running = await runningServer(session);
-  if (running) return print({ type: "ready", url: running.url, session, pid: running.pid, log, already: true });
+  if (running) return print({ type: "ready", url: running.url, session, ...(running.lanUrl ? { lanUrl: running.lanUrl } : {}), pid: running.pid, log, already: true });
   const out = fs.openSync(log, "w");
   // windowsHide: no console window on Windows. detached: its own process group (POSIX: a new
   // session, so a closing terminal's SIGHUP does not reach it).
@@ -458,7 +459,7 @@ async function serveDetached(session) {
     try { info = JSON.parse(fs.readFileSync(serverFile, "utf8")); } catch { /* not written yet */ }
     if (info && info.pid === child.pid && info.url) {
       child.unref();
-      return print({ type: "ready", url: info.url, session, pid: child.pid, log });
+      return print({ type: "ready", url: info.url, session, ...(info.lanUrl ? { lanUrl: info.lanUrl } : {}), pid: child.pid, log });
     }
     if (exited) return fail(`the server stopped before it was ready (${exited})`);
     if (Date.now() > deadline) { try { process.kill(child.pid); } catch { /* already gone */ } return fail("the server did not start within 10s"); }

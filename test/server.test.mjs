@@ -365,6 +365,56 @@ test("serve --detach: a server that cannot start exits non-zero with one line na
   assert.match(readFileSync(join(session, "serve.log"), "utf8"), /EADDRINUSE/);
 });
 
+test("serve --detach --open-command: the detached server opens the page once, after it listens; a reused server opens nothing", async (t) => {
+  if (process.platform === "win32") { t.skip("shebang probes do not execute on Windows"); return; }
+  const dir = tmp("grill-do-");
+  const seen = join(dir, "opened.txt");
+  const probe = join(dir, "probe.mjs");
+  writeFileSync(probe, `#!/usr/bin/env node\nimport { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, process.argv[2] + "\\n");\n`);
+  chmodSync(probe, 0o755);
+  const { session } = newSession(dir);
+  t.after(killSessionServer(session));
+  const r = detach(session, ["--open-command", probe]);
+  assert.equal(r.status, 0, r.stderr);
+  const ready = JSON.parse(r.stdout.trim());
+  const opened = () => { try { return readFileSync(seen, "utf8").trim().split("\n"); } catch { return []; } };
+  for (let i = 0; i < 40 && !opened().length; i++) await sleep(100);
+  assert.equal(JSON.parse(detach(session, ["--open-command", probe]).stdout.trim()).already, true);
+  await sleep(500);
+  assert.deepEqual(opened(), [ready.url], "opened exactly once, with the live URL");
+  assert.match(readFileSync(join(session, "serve.log"), "utf8"), /grill: opened /, "the opener's note goes to serve.log, not the caller");
+});
+
+test("serve --detach composes with --lan and --host: the ready line carries the LAN URL, and a running server is found again", async (t) => {
+  const ip = Object.values(networkInterfaces()).flat().find((a) => a && a.family === "IPv4" && !a.internal);
+  if (!ip) { t.skip("no LAN IPv4 interface on this machine"); return; }
+  const { session } = newSession(tmp("grill-dl-"));
+  t.after(killSessionServer(session));
+  const r = detach(session, ["--lan"]);
+  assert.equal(r.status, 0, r.stderr);
+  const ready = JSON.parse(r.stdout.trim());
+  t.after(() => killPid(ready.pid));
+  assert.match(ready.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+  assert.match(ready.lanUrl || "", /^http:\/\/[\d.]+:\d+\/\?t=[0-9a-f]{32}$/, "the detached ready line carries the LAN URL");
+  assert.equal(ready.lanUrl, JSON.parse(readFileSync(join(session, "server.json"), "utf8")).lanUrl);
+  const lan = new URL(ready.lanUrl);
+  assert.equal((await fetch(`${lan.origin}/state${lan.search}`)).status, 200, "the LAN URL is served");
+  assert.equal((await fetch(`${lan.origin}/listener`)).status, 403, "LAN /listener without the token is refused");
+  assert.deepEqual(JSON.parse(detach(session, ["--lan"]).stdout.trim()), { ...ready, already: true });
+  await killPid(ready.pid);
+
+  // --host ADDR: the printed URL is the tokenized LAN address, and the liveness check must keep the token.
+  const { session: s2 } = newSession(tmp("grill-dh-"));
+  t.after(killSessionServer(s2));
+  const h = detach(s2, ["--host", ip.address]);
+  assert.equal(h.status, 0, h.stderr);
+  const hr = JSON.parse(h.stdout.trim());
+  t.after(() => killPid(hr.pid)); // a second server, if one was wrongly started, is the one server.json names
+  assert.match(hr.url, new RegExp(`^http://${ip.address.replace(/\./g, "\\.")}:\\d+/\\?t=[0-9a-f]{32}$`));
+  const again = JSON.parse(detach(s2, ["--host", ip.address]).stdout.trim());
+  assert.deepEqual(again, { ...hr, already: true }, "a second --detach finds the running --host server instead of starting another");
+});
+
 // ---- listener: can the page tell whether an agent is listening? ----
 const listener = async (url) => (await fetch(url + "listener")).json();
 const ago = (ms) => new Date(Date.now() - ms);

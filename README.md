@@ -188,6 +188,12 @@ goes to stderr, the server keeps running, and stdout carries the same ready-then
 lines as ever. `--open-command P` runs `P` with the URL as its argument instead of the OS
 opener.
 
+`--detach` runs the same server in the background with its output in `serve.log`, prints
+its ready line (with `lanUrl` under `--lan`) once it listens, and exits. Every other flag
+goes to the background server, so `--open` opens the page once, from it. A server already
+running for the session is reported with `"already": true` instead of doubled, and opens
+nothing.
+
 `patch` merges by the rules in `SKILL.md` ("Patching state.json"). A bad patch exits
 non-zero and leaves the file untouched; a good one prints one short summary line, never the
 state.
