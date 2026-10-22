@@ -59,11 +59,9 @@ description names the phrase "grill with ui", so plain language works on every a
 What the agent needs at run time:
 
 - **A shell tool and Node 20+.** Claude Code is woken per Send by its persistent Monitor
-  tool. Every other agent uses **wait mode**, spelled out in `SKILL.md`: it starts the
-  server detached (or in a harness-managed shell session) and keeps `node server.mjs wait`
-  active in the foreground. It returns on the next Send or after a bounded timeout, then
-  loops. The agent keeps listening after replies and completed visuals, until the user
-  finishes or explicitly pauses; a running server is not a substitute for that listener.
+  tool. Agents without one use **wait mode**: `serve --detach` starts the page server,
+  and a foreground `wait` loop receives sends. Follow [Wait mode](SKILL.md#wait-mode-agents-without-a-monitor-tool)
+  for startup, harness fallback, and turn-boundary requirements.
 - **Optionally a subagent tool**, for Visualize. See [Use](#use) for the drawing modes;
   without a subagent tool, the agent draws inline.
 
@@ -129,6 +127,12 @@ If the agent crashed or was closed, sends you made in the meantime are replayed 
 and the page tab you still have open reconnects on its own. Resume does not open a second
 tab; if you closed yours, open the URL the agent prints.
 
+An unfinished, reachable page shows **No agent is listening · sends will queue until it
+resumes** with a hollow amber dot when listener information confirms inactivity and the
+agent is not marked as working. A send then reads **Sent #N · queued until an agent listens**.
+The warning is hidden when listener information is unavailable; its absence alone does not
+guarantee that an agent is listening.
+
 ## Files
 
 Session state lives outside your repo, so there is nothing to gitignore:
@@ -140,6 +144,8 @@ Session state lives outside your repo, so there is nothing to gitignore:
     state.json     written only by the agent, through `patch` (questions, recommendations, threads, status)
     events.jsonl   appended only by the page, one line per Send
     server.json    url, port and pid of the running server
+    listener.json  heartbeat written by a running `wait`
+    serve.log      server output from `serve --detach`
     visual.html    the prototype or diagram, served at /visual
 ```
 
@@ -155,8 +161,9 @@ Playwright and `ffmpeg`.
 
 ```
 node server.mjs new      --topic T [--doc P]                  create a session, print its folder
-node server.mjs serve    --session DIR [--port N] [--host ADDR | --lan] [--open | --open-command P]
+node server.mjs serve    --session DIR [--port N] [--host ADDR | --lan] [--open | --open-command P] [--detach]
                                                           serve the page; print one line per Send
+                                                          (--detach: in the background, output in serve.log)
 node server.mjs sessions [--all]                               list this project's sessions
 node server.mjs pending  --session DIR                         print sends past agent.handled
 node server.mjs wait     --session DIR [--after N] [--timeout S]  block until the next send (exit 3 on timeout)
@@ -180,6 +187,12 @@ answer from the other machine). It is best effort: without a usable opener a one
 goes to stderr, the server keeps running, and stdout carries the same ready-then-sends
 lines as ever. `--open-command P` runs `P` with the URL as its argument instead of the OS
 opener.
+
+`--detach` runs the same server in the background with its output in `serve.log`, prints
+its ready line (with `lanUrl` under `--lan`) once it listens, and exits. Every other flag
+goes to the background server, so `--open` opens the page once, from it. A server already
+running for the session is reported with `"already": true` instead of doubled, and opens
+nothing.
 
 `patch` merges by the rules in `SKILL.md` ("Patching state.json"). A bad patch exits
 non-zero and leaves the file untouched; a good one prints one short summary line, never the
@@ -211,6 +224,7 @@ node --test test/server.test.mjs
 PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/page.e2e.mjs
 PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/manual-visual.e2e.mjs
 PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/subagent-toggle.e2e.mjs
+PLAYWRIGHT_PKG=/path/to/node_modules/@playwright/test/index.mjs node test/listener.e2e.mjs
 ```
 
 The page check needs Playwright with Chromium; point `PLAYWRIGHT_PKG` at an existing install
@@ -219,5 +233,7 @@ throwaway session and drives the page end to end (staging, reload, send, working
 server restart, finished state).
 The manual-visual check covers explicit regeneration and sandbox isolation both in the
 iframe and in a separate tab. The focused toggle check covers both drawing modes, the
-choice at Send time, and per-grill persistence. Set `GRILL_EVIDENCE_DIR` to save screenshots
-and sent events from any of these browser checks.
+choice at Send time, and per-grill persistence. The listener check starts a `serve --detach`
+server and a real `wait`, and covers the page's "No agent is listening" status appearing,
+clearing, and returning. Set `GRILL_EVIDENCE_DIR` to save screenshots and send evidence
+from these browser checks.
