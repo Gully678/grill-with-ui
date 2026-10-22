@@ -282,8 +282,12 @@ function cmdServe(o) {
   // "same-origin" with this server in the browser's eyes and could read /state, /events and
   // /visual. Its requests still carry the attacker's hostname in Host, so answer only requests
   // addressed to this server's own loopback names. A mode that listens beyond loopback adds
-  // its own host:port to selfHosts (and so to selfOrigins).
-  const hostAllowed = (req) => selfHosts.includes(String(req.headers.host || "").toLowerCase());
+  // its own host:port to selfHosts (and so to selfOrigins). In LAN mode a non-loopback socket
+  // that presents a valid token may use any Host (the page opened as http://<name>.local:<port>/?t=…):
+  // the token is the authentication there, and a rebinding page cannot know it. A loopback
+  // socket gets no such pass: a foreign Host on loopback is refused whatever the query says.
+  const hostAllowed = (req, u) => selfHosts.includes(String(req.headers.host || "").toLowerCase())
+    || (!!lanToken && !isLoopbackAddr(req.socket.remoteAddress) && tokenOk(u.searchParams.get("t")));
   // Browsers set Origin on every POST, same-origin or not; reject a mismatch so another tab (or
   // the sandboxed visual iframe, whose Origin is "null") can't forge a request. No Origin at all —
   // curl, wait mode, this project's own tests — is still allowed. http://localhost:<port> is this
@@ -297,9 +301,9 @@ function cmdServe(o) {
   };
 
   const srv = http.createServer(async (req, res) => {
-    if (!hostAllowed(req)) return json(res, 403, { error: "unrecognized Host header" });
     const u = new URL(req.url, "http://x");
     const { pathname } = u;
+    if (!hostAllowed(req, u)) return json(res, 403, { error: "unrecognized Host header" });
     // Without the token a LAN neighbor could curl a send into the agent's
     // monitor (no-Origin requests are allowed on loopback, where only local
     // processes can reach the port). Gate every non-loopback socket, all paths.

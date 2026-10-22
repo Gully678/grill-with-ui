@@ -874,6 +874,46 @@ test("serve --lan: ready and server.json carry a tokenized LAN URL; the LAN orig
   assert.equal(run(["url", "--session", session]), s.ready.url, "plain url still prints one line");
 });
 
+test("serve --lan: the Host check admits the LAN host, and any Host with a valid token on a LAN socket; loopback keeps its allowlist", async (t) => {
+  const lanIps = Object.values(networkInterfaces()).flat().filter((a) => a && a.family === "IPv4" && !a.internal);
+  if (!lanIps.length) { t.skip("no LAN IPv4 interface on this machine"); return; }
+  const { session } = newSession(tmp("grill-lan-host-"));
+  const s = await startServe(session, ["--lan"]); t.after(s.stop);
+  const lan = new URL(s.ready.lanUrl);
+  const token = lan.searchParams.get("t");
+  const port = lan.port;
+  const lanBase = `http://${lan.host}/`;
+  const dotLocal = `my-mac.local:${port}`;
+  const send = JSON.stringify({ actions: [{ q: "q1", type: "defer" }] });
+
+  assert.equal((await raw(lanBase, { path: `/state?t=${token}` })).status, 200, "the printed LAN host passes the Host check");
+  for (const p of ["/", "/state", "/events"]) {
+    assert.equal((await raw(lanBase, { path: `${p}?t=${token}`, host: dotLocal })).status, 200, `LAN ${p} under a .local Host with the token is served`);
+  }
+  assert.equal((await raw(lanBase, { method: "POST", path: `/send?t=${token}`, host: dotLocal, body: send, headers: { "content-type": "application/json", origin: `http://${dotLocal}` } })).status, 200, "a .local Send with the token lands");
+  for (const [path, host] of [["/state", dotLocal], ["/state?t=wrong", dotLocal], ["/state", lan.host], ["/state", `attacker.example:${port}`]]) {
+    assert.equal((await raw(lanBase, { path, host })).status, 403, `LAN ${path} with Host ${host} and no valid token is refused`);
+  }
+  for (const host of [dotLocal, `attacker.example:${port}`, lan.host.replace(/:\d+$/, `:${Number(port) + 1}`)]) {
+    const res = await raw(s.ready.url, { path: `/state?t=${token}`, host });
+    assert.equal(res.status, 403, `loopback with Host ${host} is refused even with the token`);
+    assert.deepEqual(JSON.parse(res.body), { error: "unrecognized Host header" });
+  }
+  assert.equal((await raw(s.ready.url, { path: "/state", host: lan.host })).status, 200, "the LAN host is this server, on loopback too");
+  await s.out.nth(2);
+});
+
+test("serve --host ADDR: the address it prints is an accepted Host", async (t) => {
+  const ip = Object.values(networkInterfaces()).flat().find((a) => a && a.family === "IPv4" && !a.internal);
+  if (!ip) { t.skip("no LAN IPv4 interface on this machine"); return; }
+  const { session } = newSession(tmp("grill-host-addr-"));
+  const s = await startServe(session, ["--host", ip.address]); t.after(s.stop);
+  const u = new URL(s.ready.url);
+  assert.equal(u.hostname, ip.address);
+  assert.equal((await raw(s.ready.url, { path: `/state${u.search}` })).status, 200, "the printed URL is served");
+  assert.equal((await raw(s.ready.url, { path: "/state" })).status, 403, "and still needs its token");
+});
+
 test("serve: --lan with --host, and --open with --open-command, are rejected with one stderr line", () => {
   const { session } = newSession(tmp("grill-flag-"));
   for (const extra of [["--lan", "--host", "127.0.0.1"], ["--lan", "--host"], ["--host"], ["--open", "--open-command", "true"]]) {

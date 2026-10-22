@@ -185,13 +185,16 @@ opener.
 non-zero and leaves the file untouched; a good one prints one short summary line, never the
 state.
 
-`serve` listens on 127.0.0.1. Every route requires a Host header matching
-`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` (case-insensitive); other values
-receive 403. The IPv6 spelling is accepted as a header, but the server does not listen on
-`::1`. This prevents a web page that points its hostname at your machine (DNS rebinding)
-from reading the session. The port is required: avoid `--port 80`, since browsers omit
-that default port from Host and are refused. Local clients such as curl remain trusted:
-POSTs without an Origin header are allowed after the Host check.
+By default `serve` listens on 127.0.0.1. Every route requires a Host header matching
+`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` (case-insensitive), or the host of
+a URL the server printed (the LAN URL, or the `--host` address); other values receive 403.
+The IPv6 spelling is accepted as a header, but the server does not listen on `::1`. This
+prevents a web page that points its hostname at your machine (DNS rebinding) from reading
+the session. In LAN mode a request from a non-loopback address that carries a valid token
+may use any Host, so the page also works opened as `http://<name>.local:<port>/?t=<token>`;
+a loopback request never gets that pass. The port is required: avoid `--port 80`, since
+browsers omit that default port from Host and are refused. Local clients such as curl
+remain trusted: POSTs without an Origin header are allowed after the Host check.
 
 `/visual` is sent with `Content-Security-Policy: sandbox allow-scripts`: its scripts run
 with an opaque origin, even when opened in a separate tab. They cannot read the grill's
